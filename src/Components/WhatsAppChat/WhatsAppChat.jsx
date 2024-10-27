@@ -1,66 +1,100 @@
 import { useEffect, useRef, useState } from "react";
 import { AiOutlineWhatsApp, AiOutlineSend } from "react-icons/ai";
 import { FaDiscord, FaSlack } from "react-icons/fa";
-import useFetchUsers from "../Hooks/useFetchUsers"; // Custom hook to fetch users
-import useGetChatMessage from "../Hooks/useGetChatMessage"; // Custom hook to fetch chat messages
-import axios from "axios";
+import { io } from "socket.io-client";
+import { RiQuestionLine } from "react-icons/ri";
 
-const AdminChatDashboard = () => {
+const socket = io("http://localhost:3000");
+
+const WhatsAppChat = () => {
   const [activeTab, setActiveTab] = useState("whatsapp");
+  const [allUsers, setAllUsers] = useState([]);
   const [searchUser, setSearchUser] = useState("");
   const [selectedUser, setSelectedUser] = useState(null);
   const [message, setMessage] = useState("");
+  const [chatHistory, setChatHistory] = useState([]);
   const [isSending, setIsSending] = useState(false);
-  const chatContainerRef = useRef(null);
+  const chatEndRef = useRef(null);
 
-  const { data: users = [], isLoading: loadingUsers } = useFetchUsers();
-  const { data: chatData, refetch } = useGetChatMessage(selectedUser?.user);
+  // const { data: users = [], isLoading: loadingUsers } = useFetchUsers();
+  // const { data: chatData, refetch } = useGetChatMessage(selectedUser?.user);
 
   const defaultAvatar = "https://i.ibb.co/F8q9tsx/user2.jpg";
 
-  // Function to send a message
-  const handleSendMessage = async (e) => {
+  // socket io
+
+  useEffect(() => {
+    socket.emit("getAllUsers");
+    socket.on("allUsers", (data) => {
+      setAllUsers(data);
+    });
+
+    socket.on("chatHistory", (data) => {
+      setChatHistory(data);
+    });
+
+    socket.on("newMessage", (newMessage) => {
+      if (newMessage?.user === selectedUser?.user) {
+        setChatHistory((prev) => [...prev, newMessage]);
+      }
+    });
+
+    socket.on("updateChat", (data) => {
+      if (data?.user === selectedUser?.user) {
+        setChatHistory((prev) => [...prev, data]);
+      }
+    });
+
+    return () => {
+      socket.off("allUsers");
+      socket.off("chatHistory");
+      socket.off("newMessage");
+      socket.off("updateChat");
+    };
+  }, [selectedUser]);
+
+  useEffect(() => {
+    chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [chatHistory]);
+
+  // Function to select a user
+  const selectAUser = (user) => {
+    setSelectedUser(user);
+    socket.emit("getUserChatHistory", user?.user);
+  };
+  // Function to send reply to user via whatsApp
+  const sendReply = (e) => {
     e.preventDefault();
+    console.log("clicked");
+
     setIsSending(true);
-    try {
-      await axios.post("https://whatsapp-chat-server.vercel.app/send-whatsapp", {
-        recipientNumber: selectedUser?.user,
-        message,
-      });
-      refetch();
+    if (message.trim()) {
+      socket.emit(
+        "sendReply",
+        {
+          recipientNumber: selectedUser?.user,
+          message,
+        },
+        (response) => {
+          if (response.status === "error") {
+            alert(response.message);
+            console.error("Failed to send message:", response.message);
+          }
+          setIsSending(false);
+        }
+      );
       setMessage("");
-    } catch (error) {
-      console.error("Failed to send message:", error);
-    } finally {
-      setIsSending(false);
     }
   };
 
-  // Use an interval to refetch chat data for real-time updates
-  useEffect(() => {
-    const interval = setInterval(() => {
-      if (selectedUser) {
-        refetch();
-      }
-    }, 1000);
-    return () => clearInterval(interval);
-  }, [selectedUser, refetch]);
-
-  // Scroll to the bottom of the chat container when chatData changes
-  useEffect(() => {
-    if (chatContainerRef.current) {
-      chatContainerRef.current.scrollTop = chatContainerRef.current.scrollHeight;
-    }
-  }, [chatData]);
-
   // filter search user
-  const filterSearchUsers = users?.filter((user) => {
+  const filterSearchUsers = allUsers?.filter((user) => {
     return user?.user.toLowerCase().includes(searchUser.toLowerCase());
   });
 
-  if (loadingUsers) {
-    return <div>Loading users...</div>;
-  }
+  // if (loadingUsers) {
+  //   return <div>Loading users...</div>;
+  // }
 
   return (
     <div className="h-screen container max-w-screen-xl mx-auto">
@@ -94,7 +128,7 @@ const AdminChatDashboard = () => {
               <input type="search" placeholder="Search Users" value={searchUser} onChange={(e) => setSearchUser(e.target.value)} className="w-full mb-4 px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-1 focus:ring-[#ff0000]" />
               <div className="overflow-auto space-y-3">
                 {filterSearchUsers?.map((user) => (
-                  <button key={user?._id} onClick={() => setSelectedUser(user)} className={`flex items-center gap-3 px-3 py-2 w-full rounded-lg transition-all hover:bg-gray-100 shadow-sm ${selectedUser?.user === user?.user ? "bg-gray-300" : ""}`}>
+                  <button key={user?._id} onClick={() => selectAUser(user)} className={`flex items-center gap-3 px-3 py-2 w-full rounded-lg transition-all hover:bg-gray-100 shadow-sm ${selectedUser?.user === user?.user ? "bg-gray-300" : ""}`}>
                     <img src={defaultAvatar} alt={user?.name} className="h-10 w-10 rounded-full shadow-sm" />
                     <span className="font-semibold text-gray-700">{user?.user}</span>
                   </button>
@@ -103,7 +137,7 @@ const AdminChatDashboard = () => {
             </div>
 
             {/* Chat section */}
-            {selectedUser && (
+            {selectedUser ? (
               <main className="w-2/3 border-gray-200 bg-white rounded-lg">
                 <div className="bg-white px-6 py-3 flex items-center gap-4 shadow-sm border-b border-gray-200">
                   {selectedUser && <img src={selectedUser?.profilePicture || defaultAvatar} alt={"Profile Pic"} className="h-10 w-10 rounded-full shadow" />}
@@ -111,8 +145,8 @@ const AdminChatDashboard = () => {
                 </div>
 
                 {/* Messages */}
-                <div ref={chatContainerRef} className="h-[calc(100vh-20rem)] p-6 overflow-auto space-y-6 bg-gray-100">
-                  {chatData?.messages?.map((message) => {
+                <div className="h-[calc(100vh-20rem)] p-6 overflow-auto space-y-6 bg-gray-100">
+                  {chatHistory?.messages?.map((message) => {
                     return (
                       <div key={message._id} className={`flex ${message?.sender === "user" ? "justify-start" : "justify-end"}`}>
                         <div className={`rounded-xl px-4 py-1 shadow-md max-w-[70%] ${message?.sender === "user" ? "bg-gray-300" : "bg-red-500 text-white"}`}>
@@ -135,10 +169,11 @@ const AdminChatDashboard = () => {
                       </div>
                     );
                   })}
+                  <div ref={chatEndRef} />
                 </div>
 
                 {/* Send Message Input */}
-                <form onSubmit={handleSendMessage} className="flex gap-4 p-4 border-t border-gray-200">
+                <form onSubmit={sendReply} className="flex gap-4 p-4 border-t border-gray-200">
                   <input type="text" placeholder="Type your message" value={message} onChange={(e) => setMessage(e.target.value)} className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-1 focus:ring-[#ff0000]" />
                   <button type="submit" disabled={isSending || !message.trim()} className="flex items-center gap-2 px-4 py-2 bg-[#ff0000] text-white rounded-lg disabled:bg-gray-300">
                     <AiOutlineSend />
@@ -146,6 +181,13 @@ const AdminChatDashboard = () => {
                   </button>
                 </form>
               </main>
+            ) : (
+              <div className="flex-1 flex items-center justify-center text-[#72767d]">
+                <div className="text-center">
+                  <RiQuestionLine size={48} className="mx-auto mb-4" />
+                  <p className="text-2xl font-bold">Select a user to start conversation!</p>
+                </div>
+              </div>
             )}
           </div>
         )}
@@ -154,4 +196,4 @@ const AdminChatDashboard = () => {
   );
 };
 
-export default AdminChatDashboard;
+export default WhatsAppChat;
